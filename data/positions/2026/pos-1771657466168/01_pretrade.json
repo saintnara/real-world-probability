@@ -1,0 +1,21 @@
+{
+  "createdAt": "2026-02-21T07:04:26.168Z",
+  "positionId": "pos-1771657466168",
+  "market": "Test market",
+  "side": "YES",
+  "edgePct": 12.5,
+  "thesis": "Test thesis",
+  "evidence": [
+    "a"
+  ],
+  "invalidators": [
+    "x"
+  ],
+  "signalScore": 75,
+  "risk": {
+    "approved": true,
+    "riskPct": 0.4,
+    "riskUsd": 4,
+    "rrMin": 1.4
+  }
+}

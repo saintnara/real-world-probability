@@ -1,0 +1,22 @@
+[
+  {
+    "market": "Will BTC be above $100k by 2026-12-31?",
+    "side": "YES",
+    "edgePct": 12.5,
+    "liquidity": 250000,
+    "evidenceQuality": 92,
+    "volatilityRisk": 35,
+    "thesis": "Macro liquidity + cycle continuation with institutional demand",
+    "invalidators": ["Major regulatory shock", "Global liquidity contraction"]
+  },
+  {
+    "market": "Will Fed cut rates at least 2 times this year?",
+    "side": "NO",
+    "edgePct": 2.1,
+    "liquidity": 120000,
+    "evidenceQuality": 65,
+    "volatilityRisk": 46,
+    "thesis": "Sticky inflation keeps policy tighter for longer",
+    "invalidators": ["Sharp growth slowdown", "Unemployment spike"]
+  }
+]
