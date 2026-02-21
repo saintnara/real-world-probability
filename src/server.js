@@ -5,10 +5,44 @@ const { scoreOpportunity, riskDecision, savePositionArtifacts } = require('./pip
 
 const ROOT = path.resolve(__dirname, '..');
 const PORT = Number(process.env.PORT || 8787);
-const MAX_SWARM_AGENTS = Number(process.env.MAX_SWARM_AGENTS || 4); // avoid overload on current machine
+const MACHINE_MAX_SWARM_AGENTS = Number(process.env.MAX_SWARM_AGENTS || 4); // safety cap for this machine
+const SETTINGS_PATH = path.join(ROOT, 'data', 'settings.json');
+
+const TIER_SWARM_CAP = {
+  private: 4,
+  starter: 3,
+  pro: 8,
+  enterprise: 20
+};
 
 function readJson(p) {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
+}
+
+function writeJson(p, obj) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify(obj, null, 2));
+}
+
+function getSettings() {
+  if (!fs.existsSync(SETTINGS_PATH)) {
+    writeJson(SETTINGS_PATH, {
+      accountType: 'private',
+      requestedSwarmAgents: 3,
+      refreshIntervalSec: 20,
+      slippageTolerancePct: 1.5,
+      bankrollUsd: 1000,
+      maxRiskPerTradePct: 1
+    });
+  }
+  return readJson(SETTINGS_PATH);
+}
+
+function getSwarmLimits(settings) {
+  const tierCap = TIER_SWARM_CAP[settings.accountType] ?? TIER_SWARM_CAP.private;
+  const requested = Number(settings.requestedSwarmAgents || 1);
+  const effective = Math.max(1, Math.min(requested, tierCap, MACHINE_MAX_SWARM_AGENTS));
+  return { tierCap, machineCap: MACHINE_MAX_SWARM_AGENTS, effective };
 }
 
 function send(res, code, body, contentType = 'application/json') {
@@ -40,6 +74,13 @@ function serveFile(res, filePath, contentType = 'text/plain') {
   send(res, 200, fs.readFileSync(filePath), contentType);
 }
 
+function calcSlippagePct(oddsAtSignal, currentOdds) {
+  const a = Number(oddsAtSignal);
+  const b = Number(currentOdds);
+  if (!(a > 0) || !(b > 0)) return null;
+  return Number((Math.abs((b - a) / a) * 100).toFixed(4));
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 200, { ok: true });
 
@@ -49,7 +90,34 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url === '/api/health' && req.method === 'GET') {
-    return send(res, 200, { ok: true, maxSwarmAgents: MAX_SWARM_AGENTS });
+    const settings = getSettings();
+    const limits = getSwarmLimits(settings);
+    return send(res, 200, { ok: true, swarm: limits, settings });
+  }
+
+  if (req.url === '/api/settings' && req.method === 'GET') {
+    const settings = getSettings();
+    return send(res, 200, { settings, swarm: getSwarmLimits(settings), tiers: TIER_SWARM_CAP });
+  }
+
+  if (req.url === '/api/settings' && req.method === 'POST') {
+    try {
+      const patch = await parseBody(req);
+      const prev = getSettings();
+      const next = {
+        ...prev,
+        ...patch,
+        requestedSwarmAgents: Number(patch.requestedSwarmAgents ?? prev.requestedSwarmAgents),
+        refreshIntervalSec: Number(patch.refreshIntervalSec ?? prev.refreshIntervalSec),
+        slippageTolerancePct: Number(patch.slippageTolerancePct ?? prev.slippageTolerancePct),
+        bankrollUsd: Number(patch.bankrollUsd ?? prev.bankrollUsd),
+        maxRiskPerTradePct: Number(patch.maxRiskPerTradePct ?? prev.maxRiskPerTradePct)
+      };
+      writeJson(SETTINGS_PATH, next);
+      return send(res, 200, { ok: true, settings: next, swarm: getSwarmLimits(next) });
+    } catch (e) {
+      return send(res, 400, { error: e.message });
+    }
   }
 
   if (req.url === '/api/opportunities' && req.method === 'GET') {
@@ -64,11 +132,27 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/api/position/create' && req.method === 'POST') {
     try {
       const body = await parseBody(req);
-      const bankrollUsd = Number(body.bankrollUsd || 1000);
+      const settings = getSettings();
+      const bankrollUsd = Number(body.bankrollUsd || settings.bankrollUsd || 1000);
+      const maxRiskPerTradePct = Number(body.maxRiskPerTradePct || settings.maxRiskPerTradePct || 1);
+
       const signalScore = scoreOpportunity(body);
-      const risk = riskDecision({ bankrollUsd, signalScore, maxRiskPerTradePct: Number(body.maxRiskPerTradePct || 1) });
+      const risk = riskDecision({ bankrollUsd, signalScore, maxRiskPerTradePct });
       if (!risk.approved) {
         return send(res, 200, { approved: false, reason: 'Signal/risk gate rejected', signalScore, risk });
+      }
+
+      const slippagePct = calcSlippagePct(body.oddsAtSignal, body.currentOdds);
+      const tolerancePct = Number(settings.slippageTolerancePct || 1.5);
+      if (slippagePct !== null && slippagePct > tolerancePct) {
+        return send(res, 200, {
+          approved: false,
+          reason: 'Slippage tolerance exceeded',
+          signalScore,
+          risk,
+          slippagePct,
+          slippageTolerancePct: tolerancePct
+        });
       }
 
       const payload = {
@@ -80,7 +164,10 @@ const server = http.createServer(async (req, res) => {
         evidence: body.evidence || [],
         invalidators: body.invalidators || [],
         signalScore,
-        risk
+        risk,
+        oddsAtSignal: body.oddsAtSignal,
+        currentOdds: body.currentOdds,
+        slippagePct
       };
 
       const dir = savePositionArtifacts(ROOT, payload);
@@ -88,6 +175,8 @@ const server = http.createServer(async (req, res) => {
         approved: true,
         signalScore,
         risk,
+        slippagePct,
+        slippageTolerancePct: tolerancePct,
         positionId: payload.positionId,
         artifactDir: dir,
         summaryPdf: path.join(dir, '03_exec_summary.pdf')
@@ -109,6 +198,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
+  const settings = getSettings();
+  const limits = getSwarmLimits(settings);
   console.log(`RWP MVP running on http://localhost:${PORT}`);
-  console.log(`Max swarm agents configured: ${MAX_SWARM_AGENTS}`);
+  console.log(`Swarm cap => machine:${limits.machineCap}, tier:${limits.tierCap}, effective:${limits.effective}`);
 });

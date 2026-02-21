@@ -6,6 +6,8 @@
     "liquidity": 250000,
     "evidenceQuality": 92,
     "volatilityRisk": 35,
+    "oddsAtSignal": 0.54,
+    "currentOdds": 0.546,
     "thesis": "Macro liquidity + cycle continuation with institutional demand",
     "invalidators": ["Major regulatory shock", "Global liquidity contraction"]
   },
@@ -16,6 +18,8 @@
     "liquidity": 120000,
     "evidenceQuality": 65,
     "volatilityRisk": 46,
+    "oddsAtSignal": 0.41,
+    "currentOdds": 0.418,
     "thesis": "Sticky inflation keeps policy tighter for longer",
     "invalidators": ["Sharp growth slowdown", "Unemployment spike"]
   }

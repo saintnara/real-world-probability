@@ -1,0 +1,8 @@
+{
+  "accountType": "private",
+  "requestedSwarmAgents": 3,
+  "refreshIntervalSec": 20,
+  "slippageTolerancePct": 1.5,
+  "bankrollUsd": 1000,
+  "maxRiskPerTradePct": 1
+}

@@ -4,15 +4,34 @@
   <meta charset="utf-8" />
   <title>Real World Probability MVP</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 24px; }
+    body { font-family: Arial, sans-serif; margin: 24px; max-width: 980px; }
     .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
     button { padding: 8px 12px; cursor: pointer; }
     pre { background: #f6f6f6; padding: 12px; overflow: auto; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 10px; }
+    label { font-size: 12px; color: #333; display: block; }
+    input, select { width: 100%; padding: 7px; box-sizing: border-box; }
+    .muted { color: #666; font-size: 12px; }
   </style>
 </head>
 <body>
   <h1>Real World Probability — MVP</h1>
-  <p>Pipeline: mispricing → signal score → risk gate → executive summary PDF.</p>
+  <p>Pipeline: mispricing → signal score → risk gate (+ slippage) → executive summary PDF.</p>
+
+  <div class="card">
+    <h2>Settings</h2>
+    <div class="grid">
+      <div><label>Account Type</label><select id="accountType"><option>private</option><option>starter</option><option>pro</option><option>enterprise</option></select></div>
+      <div><label>Requested Swarm Agents</label><input id="requestedSwarmAgents" type="number" min="1" /></div>
+      <div><label>Refresh Interval (sec)</label><input id="refreshIntervalSec" type="number" min="5" /></div>
+      <div><label>Slippage Tolerance (%)</label><input id="slippageTolerancePct" type="number" step="0.1" min="0" /></div>
+      <div><label>Bankroll (USD)</label><input id="bankrollUsd" type="number" min="10" /></div>
+      <div><label>Max Risk / Trade (%)</label><input id="maxRiskPerTradePct" type="number" step="0.1" min="0.1" /></div>
+    </div>
+    <br/>
+    <button id="saveSettings">Save Settings</button>
+    <div id="swarmInfo" class="muted"></div>
+  </div>
 
   <h2>Opportunities</h2>
   <div id="list"></div>
@@ -21,33 +40,97 @@
   <pre id="result">No action yet.</pre>
 
   <script>
-    async function load() {
+    let timer = null;
+
+    async function getSettings() {
+      const res = await fetch('/api/settings');
+      const data = await res.json();
+      const s = data.settings;
+      document.getElementById('accountType').value = s.accountType;
+      document.getElementById('requestedSwarmAgents').value = s.requestedSwarmAgents;
+      document.getElementById('refreshIntervalSec').value = s.refreshIntervalSec;
+      document.getElementById('slippageTolerancePct').value = s.slippageTolerancePct;
+      document.getElementById('bankrollUsd').value = s.bankrollUsd;
+      document.getElementById('maxRiskPerTradePct').value = s.maxRiskPerTradePct;
+      document.getElementById('swarmInfo').textContent = `Effective swarm agents: ${data.swarm.effective} (tier cap: ${data.swarm.tierCap}, machine cap: ${data.swarm.machineCap})`;
+      return s;
+    }
+
+    function collectSettingsFromForm() {
+      return {
+        accountType: document.getElementById('accountType').value,
+        requestedSwarmAgents: Number(document.getElementById('requestedSwarmAgents').value),
+        refreshIntervalSec: Number(document.getElementById('refreshIntervalSec').value),
+        slippageTolerancePct: Number(document.getElementById('slippageTolerancePct').value),
+        bankrollUsd: Number(document.getElementById('bankrollUsd').value),
+        maxRiskPerTradePct: Number(document.getElementById('maxRiskPerTradePct').value)
+      };
+    }
+
+    async function saveSettings() {
+      const payload = collectSettingsFromForm();
+      const r = await fetch('/api/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const out = await r.json();
+      document.getElementById('result').textContent = JSON.stringify(out, null, 2);
+      await getSettings();
+      setupAutoRefresh();
+      await loadOpportunities();
+    }
+
+    async function loadOpportunities() {
+      const settings = collectSettingsFromForm();
       const res = await fetch('/api/opportunities');
       const data = await res.json();
       const list = document.getElementById('list');
       list.innerHTML = '';
+
       data.forEach((o) => {
+        const slippagePct = o.oddsAtSignal && o.currentOdds
+          ? Math.abs((o.currentOdds - o.oddsAtSignal) / o.oddsAtSignal) * 100
+          : null;
+
         const div = document.createElement('div');
         div.className = 'card';
         div.innerHTML = `
           <b>${o.market}</b><br/>
           Side: ${o.side} | Edge: ${o.edgePct}% | Signal: <b>${o.signalScore}</b><br/>
+          Odds signal/current: ${o.oddsAtSignal ?? '-'} / ${o.currentOdds ?? '-'}
+          ${slippagePct !== null ? `| Slippage: ${slippagePct.toFixed(3)}%` : ''}<br/>
           <small>${o.thesis}</small><br/><br/>
           <button>Create Position Summary</button>
         `;
+
         div.querySelector('button').onclick = async () => {
           const r = await fetch('/api/position/create', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({...o, bankrollUsd: 1000, maxRiskPerTradePct: 1})
+            body: JSON.stringify({ ...o, ...settings })
           });
           const out = await r.json();
           document.getElementById('result').textContent = JSON.stringify(out, null, 2);
         };
+
         list.appendChild(div);
       });
     }
-    load();
+
+    function setupAutoRefresh() {
+      if (timer) clearInterval(timer);
+      const sec = Number(document.getElementById('refreshIntervalSec').value || 20);
+      timer = setInterval(loadOpportunities, Math.max(5, sec) * 1000);
+    }
+
+    document.getElementById('saveSettings').onclick = saveSettings;
+
+    (async function init() {
+      await getSettings();
+      await loadOpportunities();
+      setupAutoRefresh();
+    })();
   </script>
 </body>
 </html>
